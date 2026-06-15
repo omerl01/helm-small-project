@@ -37,7 +37,11 @@ stringData:
   MONGO_URI: "mongodb://host.docker.internal:27017/movies"
 ```
 
-> Make sure a MongoDB is reachable at that address — e.g. the `docker run -d --name mongo -p 27017:27017 mongo:7` container from Step 01, running on your host.
+> **The Mongo container must publish its port to the host.** The pods run *inside* the cluster and reach your host through `host.docker.internal`, so Mongo has to be listening on the host network — not just on Docker's internal bridge. Run the `mongo:7` container with the host port published (`-p 27017:27017`); without it the container runs but the cluster can't connect, and the app pods fail their readiness probe.
+>
+> _Hint:_ confirm the port is published before deploying — `docker ps` should show the Mongo container mapping `0.0.0.0:27017->27017/tcp`.
+>
+> _On minikube/Linux:_ if `host.docker.internal` doesn't resolve, point `MONGO_URI` at your host's LAN IP instead and open port `27017` in the firewall.
 
 ## 3. Deployment — the app
 
@@ -113,11 +117,16 @@ kubectl apply -f k8s/
 
 kubectl get pods -l app=movie-api
 kubectl logs deploy/movie-api          # should show "[db] connected to ..."
-
-# reach the service from your machine
-kubectl port-forward svc/movie-api 8080:80
-curl http://localhost:8080/health
 ```
+
+Now reach the service from your machine and hit `/health`. You have two options:
+
+- **Option A — `minikube service` (preferred on minikube).** Ask minikube for the service URL (`minikube service movie-api --url`), then `curl` the URL it prints. Because the cluster runs inside a VM/container, this is the reliable way to reach a `ClusterIP`/`NodePort` Service.
+- **Option B — `kubectl port-forward` (any cluster).** Forward a local port to the Service and `curl localhost`. Works everywhere but ties up the terminal while the tunnel stays open.
+
+> **`ImagePullBackOff` / `ErrImagePull`?** If the pod can't pull the image — e.g. an anonymous Docker Hub pull-rate limit (`pull access denied` / `toomanyrequests` for an anonymous user), or the image only exists locally — you can sidestep the registry entirely: pull (or build) the image on your host, then load it straight into minikube's container runtime with `minikube image load`. Confirm it landed with `minikube image ls`.
+>
+> _Hint:_ also set `imagePullPolicy: IfNotPresent` on the container so Kubernetes uses the loaded image instead of pulling again. Re-apply the manifests and restart the rollout (`kubectl rollout restart deploy/movie-api`) to pick up the change.
 
 ---
 
