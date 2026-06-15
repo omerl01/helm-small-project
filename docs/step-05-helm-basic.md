@@ -131,29 +131,46 @@ Functions you'll call (all built into Helm):
 
 *Reference answer: `solved/step-05/movie-chart/templates/_helpers.tpl`.*
 
+---
+
+> **Steps E–K — don't write these from scratch.** You already wrote these exact manifests in Step 04. The job here is to **copy each file in and *templatize* it** — replace the hard-coded names, labels, and values with `{{ ... }}` expressions.
+>
+> For each step below:
+> 1. **Copy** the matching file from `solved/step-04/k8s/` (or your own Step 04 manifests) into `movie-chart/templates/`.
+> 2. **Adapt** it by making the changes listed — swap hard-coded values for the helpers and `.Values.*` references.
+>
+> | This template | Copy from |
+> | --- | --- |
+> | `configmap.yaml` | `solved/step-04/k8s/configmap.yaml` |
+> | `secret.yaml` | `solved/step-04/k8s/secret.yaml` |
+> | `deployment.yaml` | `solved/step-04/k8s/deployment.yaml` |
+> | `service.yaml` | `solved/step-04/k8s/service.yaml` |
+> | `mongo-service.yaml` | `solved/step-04/k8s/mongo-service.yaml` |
+> | `mongo-statefulset.yaml` | `solved/step-04/k8s/mongo-statefulset.yaml` |
+
 ## E. `templates/configmap.yaml`
 
-**Goal:** turn every key under `.Values.config` into a ConfigMap entry.
+**Copy** `solved/step-04/k8s/configmap.yaml`, then **adapt** it to turn every key under `.Values.config` into a ConfigMap entry:
 
-- Name it `{{ include "movie-chart.fullname" . }}-config`.
-- Add the common labels with `{{- include "movie-chart.labels" . | nindent 4 }}`.
-- Under `data:`, loop over `.Values.config` with `{{- range $key, $val := .Values.config }}` … `{{- end }}`, emitting `{{ $key }}: {{ $val | quote }}`.
+- Replace the hard-coded name with `{{ include "movie-chart.fullname" . }}-config`.
+- Replace the `labels:` block with `{{- include "movie-chart.labels" . | nindent 4 }}`.
+- Replace the fixed `data:` entries with a loop over `.Values.config`: `{{- range $key, $val := .Values.config }}` … `{{- end }}`, emitting `{{ $key }}: {{ $val | quote }}`.
 
 *Reference answer: `solved/step-05/movie-chart/templates/configmap.yaml`.*
 
 ## F. `templates/secret.yaml`
 
-**Goal:** an `Opaque` Secret named `...-secret` holding `MONGO_URI` under `stringData`.
+**Copy** `solved/step-04/k8s/secret.yaml`, then **adapt** the `Opaque` Secret so it's named `...-secret` and holds `MONGO_URI` under `stringData`:
 
-The catch (from step B): `secret.mongoUri` *itself* contains `{{ .Release.Name }}`. A plain `{{ .Values.secret.mongoUri }}` would emit that template text verbatim. Pass it through **`tpl`** to render the inner template against the current context — i.e. `tpl .Values.secret.mongoUri .`, then `| quote`.
+- Name → `{{ include "movie-chart.fullname" . }}-secret`; labels → `{{- include "movie-chart.labels" . | nindent 4 }}`.
+- The catch (from step B): `secret.mongoUri` *itself* contains `{{ .Release.Name }}`. A plain `{{ .Values.secret.mongoUri }}` would emit that template text verbatim. Pass it through **`tpl`** to render the inner template against the current context — i.e. `tpl .Values.secret.mongoUri .`, then `| quote`.
 
 *Reference answer: `solved/step-05/movie-chart/templates/secret.yaml`.*
 
 ## G. `templates/deployment.yaml`
 
-**Goal:** port your Step 03/04 Deployment to templated form.
+**Copy** `solved/step-04/k8s/deployment.yaml`, then **adapt** it to templated form:
 
-Requirements:
 - **Name:** `{{ include "movie-chart.fullname" . }}` — **replicas:** `{{ .Values.replicaCount }}`.
 - **Labels/selectors:** `metadata.labels` uses `movie-chart.labels`; both `selector.matchLabels` and the pod-template `metadata.labels` use `movie-chart.selectorLabels`. Mind the indentation: `nindent 4` for the metadata labels, `nindent 6` under `matchLabels`, `nindent 8` under the pod template.
 - **Image:** `"{{ .Values.image.repository }}:{{ .Values.image.tag }}"`, `imagePullPolicy: {{ .Values.image.pullPolicy }}`, `containerPort: {{ .Values.service.targetPort }}`.
@@ -165,9 +182,8 @@ Requirements:
 
 ## H. `templates/service.yaml`
 
-**Goal:** the app Service.
+**Copy** `solved/step-04/k8s/service.yaml`, then **adapt** the app Service:
 
-Requirements:
 - Name `{{ include "movie-chart.fullname" . }}`, common labels via `movie-chart.labels`.
 - `type: {{ .Values.service.type }}`.
 - `selector` = `movie-chart.selectorLabels` (`nindent 4`).
@@ -177,9 +193,8 @@ Requirements:
 
 ## I. `templates/mongo-service.yaml` (conditional)
 
-**Goal:** the headless Mongo Service from Step 04 — but it must only render when in-cluster Mongo is enabled.
+**Copy** `solved/step-04/k8s/mongo-service.yaml` (the headless Mongo Service), then **adapt** it — the new twist is that it must only render when in-cluster Mongo is enabled:
 
-Requirements:
 - Wrap the **entire file** in `{{- if .Values.mongo.enabled }}` … `{{- end }}`.
 - Name it `{{ include "movie-chart.mongoName" . }}`; make it headless (`clusterIP: None`).
 - Add a `component: mongo` label to **both** the labels and the selector, so this Service's selector doesn't collide with the app Service's selector (they'd otherwise share the same app+release labels and grab each other's pods).
@@ -189,9 +204,8 @@ Requirements:
 
 ## J. `templates/mongo-statefulset.yaml` (conditional)
 
-**Goal:** the Mongo StatefulSet from Step 04, templated and wrapped in the **same** `{{- if .Values.mongo.enabled }}` guard.
+**Copy** `solved/step-04/k8s/mongo-statefulset.yaml`, then **adapt** it — templated and wrapped in the **same** `{{- if .Values.mongo.enabled }}` guard as step I:
 
-Requirements:
 - Name and `serviceName` both = `{{ include "movie-chart.mongoName" . }}`; `replicas: 1`.
 - Same `component: mongo` label on metadata, selector, and pod template as in step I (same indentation rules as the Deployment).
 - Container image `{{ .Values.mongo.image }}`, container port `27017`, volume mount at `/data/db`.
@@ -201,7 +215,7 @@ Requirements:
 
 ## K. `templates/NOTES.txt`
 
-**Goal:** post-install help, printed by Helm after `install`/`upgrade`.
+**This one is new** — there's no Step 04 file to copy. Write it from scratch: post-install help, printed by Helm after `install`/`upgrade`.
 
 Requirements:
 - A `kubectl port-forward` line built from `{{ include "movie-chart.fullname" . }}` and `{{ .Values.service.port }}`.
