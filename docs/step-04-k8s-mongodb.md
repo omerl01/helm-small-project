@@ -2,128 +2,76 @@
 
 **Goal:** move MongoDB *inside* the cluster with persistent storage, and repoint the app at it. You add two new manifests and change one line in the Secret.
 
-Keep working in your `k8s/` folder from Step 03.
+Write the new manifests yourself from the hints. No copy-paste YAML. (Reference answer: `solved/step-04/`.)
+
+> **Set up:** start from a copy of your Step 03 `k8s/` folder (e.g. `cp -r step-03 step-04`). You will reuse `configmap.yaml`, `deployment.yaml`, and `service.yaml` unchanged, edit `secret.yaml`, and add two Mongo manifests.
 
 ---
 
-## 1. Headless Service for MongoDB
+## A. Headless Service for MongoDB
 
-A headless Service (`clusterIP: None`) gives the StatefulSet pod a stable DNS name (`mongo-0.mongo`) and lets other pods reach it as `mongo`.
+**Goal:** give the MongoDB pod a stable network identity so other pods can reach it by name (`mongo`).
 
-`mongo-service.yaml`:
+**Task:** write `k8s/mongo-service.yaml` for a `Service` named `mongo`.
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: mongo
-  labels:
-    app: mongo
-spec:
-  clusterIP: None
-  selector:
-    app: mongo
-  ports:
-    - port: 27017
-      targetPort: 27017
-```
+*Hints:*
+- Make it **headless** — set `clusterIP: None`. (A headless Service is the standard partner for a StatefulSet; it gives stable per-pod DNS like `mongo-0.mongo`.)
+- `selector` should match the Mongo pod labels (e.g. `app: mongo`).
+- Port `27017`.
 
-## 2. StatefulSet for MongoDB (with persistent storage)
+## B. StatefulSet for MongoDB (with persistent storage)
 
-`volumeClaimTemplates` creates a PersistentVolumeClaim so the data survives pod restarts.
+**Goal:** run MongoDB with storage that survives pod restarts.
 
-`mongo-statefulset.yaml`:
+**Task:** write `k8s/mongo-statefulset.yaml` for a `StatefulSet` named `mongo`.
 
-```yaml
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: mongo
-spec:
-  serviceName: mongo
-  replicas: 1
-  selector:
-    matchLabels:
-      app: mongo
-  template:
-    metadata:
-      labels:
-        app: mongo
-    spec:
-      containers:
-        - name: mongo
-          image: mongo:7
-          ports:
-            - containerPort: 27017
-          volumeMounts:
-            - name: data
-              mountPath: /data/db
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 1Gi
-```
+*Requirements & hints:*
+- `apiVersion: apps/v1`, `kind: StatefulSet`, `replicas: 1`.
+- `serviceName` must point at the headless Service (`mongo`).
+- Pod labels (`app: mongo`) must match both the StatefulSet `selector` and the headless Service `selector`.
+- Container: image `mongo:7`, port `27017`.
+- For durable storage, use `volumeClaimTemplates` (not a plain `volumes:` entry) — this creates a PersistentVolumeClaim per replica. Mount it at `/data/db` (where MongoDB stores its files). Request e.g. `1Gi`, `accessModes: ["ReadWriteOnce"]`.
 
-## 3. Repoint the app's Secret at the in-cluster Mongo
+*Self-check:* why a StatefulSet + `volumeClaimTemplates` instead of a Deployment with one PVC? (stable identity + per-replica storage)
 
-Change `MONGO_URI` in `secret.yaml` to use the `mongo` Service name as the host:
+## C. Repoint the app's Secret at the in-cluster Mongo
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: movie-api-secret
-type: Opaque
-stringData:
-  # in-cluster Mongo: <service>:<port>. The headless service is "mongo".
-  MONGO_URI: "mongodb://mongo:27017/movies"
-```
+**Task:** edit `k8s/secret.yaml` so `MONGO_URI` uses the in-cluster Service name as the host instead of `host.docker.internal`.
+
+*Hint:* the host part becomes the Service name `mongo` → `mongodb://mongo:27017/movies`.
 
 > `configmap.yaml`, `deployment.yaml`, and `service.yaml` are unchanged from Step 03.
 
 ---
 
-## 4. Apply in the right order
+## D. Apply in the right order
 
-Bring up MongoDB first, then the app, so the app finds the database on startup.
+**Goal:** bring MongoDB up *before* the app, so the app finds the database on startup. (If the app starts first it will fail to connect and restart until Mongo is ready — not fatal, but bring up Mongo first to avoid the churn.)
 
-```bash
-# 1) MongoDB
-kubectl apply -f k8s/mongo-service.yaml
-kubectl apply -f k8s/mongo-statefulset.yaml
-kubectl rollout status statefulset/mongo
+**Tasks (work out the commands):**
+1. Apply the Mongo Service and StatefulSet, then wait for the StatefulSet to be ready.
+2. Apply the app's ConfigMap, Secret, Deployment, and Service.
 
-# 2) the app (and its config/secret)
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/secret.yaml
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-```
+*Hints:*
+- `kubectl apply -f <file>` (you can pass multiple `-f`).
+- Wait with `kubectl rollout status statefulset/mongo`.
 
----
+## E. Verify
 
-## 5. Verify
+**Tasks:**
+1. Confirm the app logs show it connected to `mongodb://mongo:27017/...`.
+2. Port-forward and create/list a movie.
+3. (Optional) exec into the Mongo pod and count documents to prove the data lives in the in-cluster DB.
 
-```bash
-kubectl logs deploy/movie-api | grep "connected to"
-# [db] connected to mongodb://mongo:27017/movies
-
-kubectl port-forward svc/movie-api 8080:80
-curl -X POST http://localhost:8080/movies \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Dune","year":2021,"genre":"Sci-Fi"}'
-curl http://localhost:8080/movies
-```
+*Hints:*
+- `kubectl logs deploy/movie-api | grep "connected to"`.
+- `kubectl exec mongo-0 -- mongosh movies --quiet --eval "db.movies.countDocuments()"`.
 
 ---
 
 ## What you learned
 
-- StatefulSet + headless Service + PVC is the standard pattern for stateful workloads like databases on Kubernetes.
+- StatefulSet + headless Service + `volumeClaimTemplates` (PVC) is the standard pattern for stateful workloads like databases on Kubernetes.
 - The app didn't change at all — only the `MONGO_URI` in the Secret. Same image, new database target.
 
 ## Next
