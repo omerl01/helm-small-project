@@ -76,24 +76,59 @@ Leave everything else out — do not re-list keys that don't change.
 
 **Goal:** define reusable name/label snippets once, so every resource is named and labelled consistently. You call them from other templates with `include`.
 
-**Define these five named templates** (each is a `{{- define "…" -}}` … `{{- end -}}` block):
+This is your first time writing Helm template *functions*, so before the tasks, here are the building blocks you'll use.
 
-| Helper | Returns | Used for |
+### Concepts you'll need first
+
+- **`{{- define "movie-chart.name" -}}` … `{{- end -}}`** declares a named template (think: a small function). It doesn't output anything on its own — something has to *call* it.
+- **`{{ include "movie-chart.name" . }}`** calls a named template. The trailing **`.`** is the argument: it's the current context (the root object that holds `.Values`, `.Release`, `.Chart`, …). **You must pass `.`** — without it the called template can't see any values.
+- **The dashes** in `{{-` and `-}}` trim surrounding whitespace/newlines so the rendered YAML doesn't get blank lines. Use them on the `define`/`end` lines.
+- **`|` (pipe)** sends the value on the left as the *last argument* to the function on the right. So `printf "..." | trunc 63 | trimSuffix "-"` builds a string, then trims it, then cleans it — left to right.
+
+Functions you'll call (all built into Helm):
+
+| Function | What it does | Why you need it |
 | --- | --- | --- |
-| `movie-chart.name` | chart name, overridable via `nameOverride` | label values |
-| `movie-chart.fullname` | `<release>-<name>` (e.g. `demo-movie-chart`) | resource names |
-| `movie-chart.labels` | common labels (name, instance, managed-by, chart) | every resource's `metadata.labels` |
-| `movie-chart.selectorLabels` | the **stable** subset (name + instance only) | `selector` / `matchLabels` |
-| `movie-chart.mongoName` | `<release>-mongo` | the Mongo Service/StatefulSet name |
+| `default A B` | returns `B` if it's set, otherwise falls back to `A` | let a user override the name, but default to the chart name |
+| `printf "%s-%s" x y` | string formatting, like in C/Go | glue `<release>-<name>` together |
+| `trunc 63 X` | cut a string to 63 chars | k8s names have a 63-char limit |
+| `trimSuffix "-" X` | drop a trailing `-` if present | truncating at 63 might leave a dangling `-`, which is illegal |
 
-*Hints:*
-- Use `printf "%s-%s" ...` to build names, and pipe through `| trunc 63 | trimSuffix "-"` to stay within k8s name limits.
-- `movie-chart.name` should fall back to the chart name: `default .Chart.Name .Values.nameOverride`.
-- `movie-chart.labels` includes `helm.sh/chart` (built from `.Chart.Name` + `.Chart.Version`); `movie-chart.selectorLabels` must **not**.
+### The five templates to define
 
-**Why `labels` and `selectorLabels` are split:** a Deployment's `selector` is **immutable** after creation. If you put `helm.sh/chart` (which includes the chart version) into the selector, the next `version` bump would change the selector and break the upgrade. So `selectorLabels` holds only the stable name+instance, and `labels` adds the rest on top.
+#### 1. `movie-chart.name` — the base name
+- **Returns:** the chart's name, but allow a user override via `.Values.nameOverride`.
+- **How:** `default .Chart.Name .Values.nameOverride`, then pipe through `trunc 63 | trimSuffix "-"`.
+- **Why:** every label and other helper builds on this one name, so it lives in one place.
 
-> From here on, every template references these helpers, e.g. `{{ include "movie-chart.fullname" . }}` for a name and `{{- include "movie-chart.labels" . | nindent 4 }}` for the label block. `nindent N` indents the rendered lines by N spaces so the YAML stays valid.
+#### 2. `movie-chart.fullname` — the full resource name
+- **Returns:** `<release>-<name>`, e.g. `demo-movie-chart`.
+- **How:** `printf "%s-%s" .Release.Name (include "movie-chart.name" .)`, then `trunc 63 | trimSuffix "-"`. Note you **call helper #1 from inside #2** with `include "movie-chart.name" .` wrapped in parentheses.
+- **Why:** resources need release-specific names so two installs of the chart don't collide.
+
+#### 3. `movie-chart.labels` — the full label set
+- **Returns:** four lines of YAML labels:
+  - `app.kubernetes.io/name:` → `{{ include "movie-chart.name" . }}`
+  - `app.kubernetes.io/instance:` → `{{ .Release.Name }}`
+  - `app.kubernetes.io/managed-by:` → `{{ .Release.Service }}` (this is "Helm")
+  - `helm.sh/chart:` → `{{ printf "%s-%s" .Chart.Name .Chart.Version }}`
+- **Why:** these are the standard recommended Kubernetes labels; putting them on every object makes resources searchable and consistent.
+
+#### 4. `movie-chart.selectorLabels` — the stable subset
+- **Returns:** only the **first two** labels from #3 — `app.kubernetes.io/name` and `app.kubernetes.io/instance`. Nothing else.
+- **Why (important):** a Deployment's/StatefulSet's `selector` is **immutable** — you can't change it after creation. `helm.sh/chart` contains the chart *version*, which changes on every chart bump. If the version were in the selector, your next `helm upgrade` would try to change an immutable field and **fail**. So selectors get only the labels that never change.
+
+#### 5. `movie-chart.mongoName` — the Mongo name
+- **Returns:** `<release>-mongo`, e.g. `demo-mongo`.
+- **How:** `printf "%s-mongo" .Release.Name`.
+- **Why:** the Mongo Service name must match the host inside `secret.mongoUri` (step B), which is also built from the release name — so they always line up.
+
+> **How you'll use these later:** in the other templates you call a helper for a name like `name: {{ include "movie-chart.fullname" . }}`, and for a whole label block like:
+> ```yaml
+> labels:
+>   {{- include "movie-chart.labels" . | nindent 4 }}
+> ```
+> `nindent 4` re-indents the helper's output by 4 spaces so it nests correctly under `labels:`. (Plain `indent` doesn't add the leading newline; `nindent` does — that's why label blocks use `nindent`.)
 
 *Reference answer: `solved/step-05/movie-chart/templates/_helpers.tpl`.*
 
